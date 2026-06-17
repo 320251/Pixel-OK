@@ -1321,7 +1321,164 @@ def _string_list(value: object, fallback: list[str], limit: int = 6, item_limit:
 def _sanitize_palette(value: object, fallback: list[str]) -> list[str]:
     raw_items = value if isinstance(value, list) else []
     colors = [color.strip().lower() for color in raw_items if isinstance(color, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", color.strip())]
-    return colors[:6] or fallback
+    return _ensure_vibrant_palette(colors[:6] or fallback)
+
+
+def _hex_luma(color: str) -> float:
+    match = re.fullmatch(r"#([0-9a-fA-F]{6})", str(color or "").strip())
+    if not match:
+        return 0.5
+    raw = match.group(1)
+    red = int(raw[0:2], 16) / 255
+    green = int(raw[2:4], 16) / 255
+    blue = int(raw[4:6], 16) / 255
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+
+def _ensure_vibrant_palette(colors: list[str]) -> list[str]:
+    merged: list[str] = []
+    for color in [*(colors or []), *DEFAULT_PALETTE]:
+        text = str(color or "").strip().lower()
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", text) or text in merged:
+            continue
+        if _hex_luma(text) < 0.18:
+            continue
+        merged.append(text)
+        if len(merged) >= 6:
+            break
+    return merged[:6] or DEFAULT_PALETTE[:]
+
+
+COMPOSITIONS = {"poster", "stage-card", "room-card", "street-card", "object-card", "portrait-card", "world-card"}
+
+
+def _fallback_composition(theme_family: str, index: int) -> str:
+    family = _normalized_theme_family(theme_family)
+    options = {
+        "lonely-night": ["room-card", "street-card", "portrait-card"],
+        "cosmic-world": ["world-card", "poster", "object-card"],
+        "rain-memory": ["room-card", "street-card", "object-card"],
+        "dance-pop": ["stage-card", "poster", "portrait-card"],
+        "romance-pop": ["portrait-card", "room-card", "object-card"],
+        "urban-stage": ["street-card", "stage-card", "poster"],
+    }
+    values = options.get(family, ["poster", "stage-card", "object-card"])
+    return values[index % len(values)]
+
+
+def _sanitize_composition(value: object, fallback: str) -> str:
+    text = str(value or fallback or "poster").strip().lower()
+    return text if text in COMPOSITIONS else fallback if fallback in COMPOSITIONS else "poster"
+
+
+def _default_palette_roles(palette: list[str]) -> dict:
+    safe = _ensure_vibrant_palette(palette)
+    return {
+        "background": "#111a3f",
+        "key": safe[0],
+        "accent": safe[1 % len(safe)],
+        "flash": "#fff6b0",
+        "floor": safe[2 % len(safe)],
+        "lyric": "#f4f7fb",
+    }
+
+
+def _sanitize_palette_roles(value: object, palette: list[str]) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    fallback = _default_palette_roles(palette)
+    roles = {}
+    for key, fallback_color in fallback.items():
+        color = str(raw.get(key) or fallback_color).strip().lower()
+        roles[key] = color if re.fullmatch(r"#[0-9a-fA-F]{6}", color) else fallback_color
+    return roles
+
+
+def _sanitize_brightness(value: object) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    return {
+        "base": round(_clamp_number(raw.get("base"), 0.68, 0.25, 1.0), 3),
+        "backgroundLift": round(_clamp_number(raw.get("backgroundLift") or raw.get("background_lift"), 0.32, 0.0, 0.8), 3),
+        "chorusBoost": round(_clamp_number(raw.get("chorusBoost") or raw.get("chorus_boost"), 0.36, 0.0, 0.9), 3),
+        "flash": round(_clamp_number(raw.get("flash"), 0.72, 0.0, 1.0), 3),
+    }
+
+
+def _fallback_key_visual(
+    *,
+    primary_motif: str,
+    secondary_motifs: list[str],
+    theme_family: str,
+    index: int,
+) -> dict:
+    subject = _humanize_slug(primary_motif)
+    props = _fallback_props(theme_family, secondary_motifs, index)
+    setting = _fallback_setting(theme_family, index)
+    return {
+        "subject": subject,
+        "setting": setting,
+        "symbols": props[:5],
+        "foreground": f"large readable pixel silhouette or object for {subject}",
+        "midground": ", ".join(props[:2]) or "one strong prop shape",
+        "background": setting,
+        "styleNotes": "poster-like static pixel key visual; one clear subject, bright reactive lighting, no readable text or waveform art",
+    }
+
+
+def _sanitize_key_visual(value: object, fallback: dict) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    fallback_symbols = fallback.get("symbols") if isinstance(fallback.get("symbols"), list) else ["signature prop"]
+    return {
+        "subject": _compact_text(raw.get("subject"), str(fallback.get("subject") or "song subject"), 90),
+        "setting": _compact_text(raw.get("setting"), str(fallback.get("setting") or "song-specific frame"), 120),
+        "symbols": _string_list(raw.get("symbols") or raw.get("props"), [str(item) for item in fallback_symbols], 6, 48),
+        "foreground": _compact_text(raw.get("foreground"), str(fallback.get("foreground") or "large foreground subject"), 140),
+        "midground": _compact_text(raw.get("midground"), str(fallback.get("midground") or "supporting props"), 140),
+        "background": _compact_text(raw.get("background"), str(fallback.get("background") or "bright stylized setting"), 140),
+        "styleNotes": _compact_text(raw.get("styleNotes") or raw.get("style_notes"), str(fallback.get("styleNotes") or "pixel key visual"), 220),
+    }
+
+
+def _fallback_lighting(theme_family: str, energy: float, palette: list[str]) -> dict:
+    roles = _default_palette_roles(palette)
+    family = _normalized_theme_family(theme_family)
+    base = {
+        "lonely-night": "blue-magenta rim light with warm windows",
+        "cosmic-world": "star-bright cyan/yellow glow",
+        "rain-memory": "wet blue reflections with yellow window flashes",
+        "dance-pop": "club spotlight and floor glow",
+        "romance-pop": "warm key light with pink accent flashes",
+        "urban-stage": "neon street light and stage wash",
+    }.get(family, "bright pixel poster lighting")
+    return {
+        "base": base,
+        "beat": "small glow pulse on the key visual",
+        "bar": "camera push and solid floor tile lift",
+        "peak": "short white/accent flash around the subject",
+        "quiet": "hold the key visual with dimmer background",
+        "chorus": "increase background lift, floor glow, and color saturation",
+        "colors": {"key": roles["key"], "accent": roles["accent"], "flash": roles["flash"], "floor": roles["floor"]},
+        "intensity": round(0.55 + energy * 0.4, 3),
+    }
+
+
+def _sanitize_lighting(value: object, fallback: dict, palette: list[str]) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    colors_raw = raw.get("colors") if isinstance(raw.get("colors"), dict) else {}
+    fallback_colors = fallback.get("colors") if isinstance(fallback.get("colors"), dict) else _default_palette_roles(palette)
+    colors = {}
+    for key in ("key", "accent", "flash", "floor"):
+        color = str(colors_raw.get(key) or fallback_colors.get(key) or _default_palette_roles(palette).get(key) or "#ffffff").strip().lower()
+        colors[key] = color if re.fullmatch(r"#[0-9a-fA-F]{6}", color) else str(fallback_colors.get(key) or "#ffffff")
+    return {
+        "base": _compact_text(raw.get("base"), str(fallback.get("base") or "bright pixel key light"), 120),
+        "beat": _compact_text(raw.get("beat"), str(fallback.get("beat") or "small pulse"), 120),
+        "bar": _compact_text(raw.get("bar"), str(fallback.get("bar") or "camera push"), 120),
+        "peak": _compact_text(raw.get("peak"), str(fallback.get("peak") or "brief flash"), 120),
+        "quiet": _compact_text(raw.get("quiet"), str(fallback.get("quiet") or "held dim frame"), 120),
+        "chorus": _compact_text(raw.get("chorus"), str(fallback.get("chorus") or "brighter color lift"), 120),
+        "colors": colors,
+        "intensity": round(_clamp_number(raw.get("intensity"), fallback.get("intensity", 0.72), 0.2, 1.4), 3),
+    }
 
 
 def _fallback_setting(theme_family: str, index: int) -> str:
@@ -1473,7 +1630,9 @@ def _fallback_visual_plan(title: str, lyrics: str, duration: float, waveform: di
     seed = _stable_seed(f"{title}\n{lyrics}\n{context_text}\n{json.dumps(waveform or {}, ensure_ascii=False)}")
     motifs = _extract_visual_tokens(title, f"{context_text}\n{lyrics}")
     theme_family = _theme_family(title, f"{context_text}\n{lyrics}", motifs)
-    palette = _seed_palette(seed)
+    palette = _ensure_vibrant_palette(_seed_palette(seed))
+    palette_roles = _default_palette_roles(palette)
+    brightness = _sanitize_brightness({})
     visual_script = _fallback_visual_script(title, theme_family, motifs, palette)
     count = max(2, min(32, int(round((duration / 60.0) * 4)) or 3))
     scenes = []
@@ -1486,15 +1645,26 @@ def _fallback_visual_plan(title: str, lyrics: str, duration: float, waveform: di
         primary_motif = _distinct_primary_motif(theme_family, index, previous_motif, scene_motifs)
         secondary_motifs = [item for item in scene_motifs if item != primary_motif][:2]
         clip = _fallback_clip(primary_motif, theme_family, seed, index, energy)
+        composition = _fallback_composition(theme_family, index)
+        key_visual = _fallback_key_visual(
+            primary_motif=primary_motif,
+            secondary_motifs=secondary_motifs,
+            theme_family=theme_family,
+            index=index,
+        )
+        lighting = _fallback_lighting(theme_family, energy, palette)
         scenes.append(
             {
                 "start": start,
                 "end": end,
-                "kind": "procedural",
+                "kind": "key-visual",
+                "composition": composition,
                 "themeFamily": theme_family,
                 "primaryMotif": primary_motif,
                 "secondaryMotifs": secondary_motifs,
                 "motifs": [primary_motif, *scene_motifs][:5],
+                "keyVisual": key_visual,
+                "lighting": lighting,
                 "intent": _fallback_scene_intent(
                     title=title,
                     primary_motif=primary_motif,
@@ -1514,18 +1684,22 @@ def _fallback_visual_plan(title: str, lyrics: str, duration: float, waveform: di
         )
 
     return {
+        "version": 3,
         "source": "fallback",
+        "vjMode": "key-visual-reactive",
         "themeLabel": f"视觉 DNA {seed & 0xFFFF:04x}",
         "mood": "song-reactive",
-        "summary": "无固定歌曲模板；先按歌词和歌名选可画主体，再用波形驱动动作、爆发和切段。",
+        "summary": "无固定歌曲模板；先按歌词、歌名和歌曲上下文选主视觉，再用波形驱动灯光、闪白、镜头和切段。",
         "palette": palette,
+        "paletteRoles": palette_roles,
+        "brightness": brightness,
         "motifs": motifs[:8],
         "visualScript": visual_script,
         "visualDNA": {
             "seed": seed,
-            "engine": "procedural-pixel-mv",
+            "engine": "key-visual-reactive-vj",
             "themeFamily": theme_family,
-            "rules": ["waveform-bins", "lyric-cues", "per-song-seed", "scene-intent"],
+            "rules": ["key-visual", "reactive-lighting", "waveform-bins", "lyric-cues", "per-song-seed", "scene-intent"],
         },
         "scenes": scenes,
     }
@@ -1895,6 +2069,8 @@ def _sanitize_visual_plan(plan: dict, title: str, lyrics: str, duration: float, 
 
     fallback = _fallback_visual_plan(title, lyrics, duration, waveform, song_context)
     palette = _sanitize_palette(plan.get("palette"), fallback["palette"])
+    palette_roles = _sanitize_palette_roles(plan.get("paletteRoles") or plan.get("palette_roles"), palette)
+    brightness = _sanitize_brightness(plan.get("brightness"))
     visual_script = _sanitize_visual_script(plan.get("visualScript") or plan.get("visual_script"), fallback.get("visualScript", {}))
 
     raw_scenes = plan.get("scenes")
@@ -1912,7 +2088,6 @@ def _sanitize_visual_plan(plan: dict, title: str, lyrics: str, duration: float, 
             continue
         start = _clamp_number(raw.get("start"), 0, 0, duration)
         end = _clamp_number(raw.get("end"), start + 12, start + 1, duration)
-        kind = "procedural"
         motifs = raw.get("motifs")
         if not isinstance(motifs, list):
             motifs = fallback["motifs"]
@@ -1945,6 +2120,20 @@ def _sanitize_visual_plan(plan: dict, title: str, lyrics: str, duration: float, 
             palette=palette,
         )
         scene_palette = _sanitize_palette(raw.get("palette"), palette)
+        composition = _sanitize_composition(raw.get("composition"), str(fallback_scene.get("composition") or _fallback_composition(scene_theme, len(scenes))))
+        fallback_key_visual = fallback_scene.get("keyVisual") if isinstance(fallback_scene.get("keyVisual"), dict) else _fallback_key_visual(
+            primary_motif=primary_motif,
+            secondary_motifs=[str(item) for item in secondary_motifs],
+            theme_family=scene_theme,
+            index=len(scenes),
+        )
+        key_visual = _sanitize_key_visual(raw.get("keyVisual") or raw.get("key_visual"), fallback_key_visual)
+        fallback_lighting = fallback_scene.get("lighting") if isinstance(fallback_scene.get("lighting"), dict) else _fallback_lighting(
+            scene_theme,
+            _clamp_number(raw.get("density"), 0.5, 0, 1),
+            scene_palette,
+        )
+        lighting = _sanitize_lighting(raw.get("lighting"), fallback_lighting, scene_palette)
         scene_intent = _sanitize_scene_intent(raw.get("intent") or raw.get("sceneIntent") or raw.get("scene_intent"), fallback_intent, scene_palette)
         fallback_clip = fallback_scene.get("clip") if isinstance(fallback_scene.get("clip"), dict) else _fallback_clip(primary_motif, scene_theme, int(fallback_visual.get("seed") or 1), len(scenes), 0.5)
         clip = _sanitize_clip(raw.get("clip"), fallback_clip)
@@ -1960,11 +2149,14 @@ def _sanitize_visual_plan(plan: dict, title: str, lyrics: str, duration: float, 
             {
                 "start": round(start, 3),
                 "end": round(max(end, start + 1), 3),
-                "kind": kind,
+                "kind": "key-visual",
+                "composition": composition,
                 "themeFamily": scene_theme,
                 "primaryMotif": primary_motif,
                 "secondaryMotifs": [str(item)[:24] for item in secondary_motifs[:3]],
                 "motifs": [primary_motif, *[str(item)[:24] for item in motifs[:4]]][:5],
+                "keyVisual": key_visual,
+                "lighting": lighting,
                 "intent": scene_intent,
                 "motion": str(raw.get("motion", "clip_parts_follow_waveform"))[:120],
                 "clip": clip,
@@ -1975,8 +2167,7 @@ def _sanitize_visual_plan(plan: dict, title: str, lyrics: str, duration: float, 
             }
         )
 
-    min_scene_count = max(2, min(32, int(round((duration / 60.0) * 3)) or 2))
-    if len(scenes) < min_scene_count:
+    if not scenes:
         scenes = fallback["scenes"]
     scenes.sort(key=lambda item: item["start"])
     scenes[0]["start"] = 0
@@ -1997,15 +2188,21 @@ def _sanitize_visual_plan(plan: dict, title: str, lyrics: str, duration: float, 
             scenes[index]["motifs"] = [replacement, *[item for item in scenes[index]["motifs"] if item != replacement]][:5]
             if isinstance(scenes[index].get("intent"), dict):
                 scenes[index]["intent"]["subject"] = _humanize_slug(replacement)
+            if isinstance(scenes[index].get("keyVisual"), dict):
+                scenes[index]["keyVisual"]["subject"] = _humanize_slug(replacement)
             if isinstance(scenes[index].get("clip"), dict):
                 scenes[index]["clip"]["subject"] = replacement
 
     return {
+        "version": 3,
         "source": str(plan.get("source", "codex"))[:24],
+        "vjMode": str(plan.get("vjMode") or plan.get("vj_mode") or "key-visual-reactive")[:48],
         "themeLabel": str(plan.get("themeLabel", fallback["themeLabel"]))[:80],
         "mood": str(plan.get("mood", fallback["mood"]))[:60],
         "summary": str(plan.get("summary", fallback["summary"]))[:180],
         "palette": palette,
+        "paletteRoles": palette_roles,
+        "brightness": brightness,
         "motifs": [str(item)[:24] for item in (plan.get("motifs") or fallback["motifs"])[:8]] or fallback["motifs"],
         "visualScript": visual_script,
         "visualDNA": {**(raw_visual_dna or fallback["visualDNA"]), "themeFamily": theme_family},
@@ -2106,12 +2303,13 @@ def _run_codex_visual_plan(
 You are Pixel OK's runtime visual-planning agent, invoked by `codex exec`.
 Return only one JSON object. No markdown, no explanation, no prose outside JSON.
 
-Your job runs later when the user clicks the app's animation button. Do not assume a fixed song. For each request, research and reason from the supplied artist/title, lyrics, waveform summary, and song context, then generate this song's own procedural pixel MV direction package.
+Your job runs later when the user clicks the app's one-key animation flow. Do not assume a fixed song. For each request, research and reason from the supplied artist/title, lyrics, waveform summary, and song context, then generate this song's own Pixel OK VJ v3 direction package.
 
 Responsibility boundary:
-- You are the visual director and pixel asset planner, not the audio-reactive renderer.
+- You are the visual director, not the audio-reactive renderer.
 - The local browser VJ engine will drive movement from `analysis.beatTimes`, `analysis.barTimes`, sections, peaks, energy, onsets, and lyric cues.
-- Your output must say what should be on screen: subjects, props, settings, scene intent, palettes, pixel sprites, placements, and rough timing.
+- Your output must say what should be on screen: one stable key visual per scene, its setting, symbols, composition, palette, lighting behavior, and rough timing.
+- The browser will draw the key visual mathematically and make it react. You should not require complex character acting or many tiny pose changes.
 - Do not ask the frontend to show waveform/equalizer/particles as the concept. Waveform data is control data only.
 - Every visual change should be explainable by at least one of: beat, bar, section, peak/onset, lyric entrance, or song-specific art direction.
 
@@ -2123,18 +2321,39 @@ Research setup:
 
 Hard ban:
 - Do not reuse a fixed song template. Do not mention Billie Jean, Michael Jackson, moonwalk, glove, fedora, or thriller cues unless the supplied metadata/context is actually that song or artist.
-- Do not use a fixed renderer vocabulary, stock motif whitelist, reusable song templates, equalizer, waveform drawing, ribbon, ring, tunnel, grid, shard, vortex, or generic audio visualization as the idea.
-- `primaryMotif` is metadata only. The frontend never switches on it. The actual drawing must be fully described by `scene.clip.sprites`, `scene.clip.spritePlacements`, and optional environment `scene.clip.parts`.
-- Do not output any legacy motif key from previous builds as the solution. If a similar idea fits, describe it through scene intent and concrete sprites instead.
+- Do not use a fixed renderer vocabulary, stock motif whitelist, reusable song templates, equalizer, waveform drawing, ribbon, ring, tunnel, grid, shard, vortex, random particles, or generic audio visualization as the idea.
+- Do not make rectangle-only visuals that require the viewer to guess the subject.
+- Do not draw every lyric line as a literal object.
+- `primaryMotif` is metadata only. The frontend never switches on it. The actual v3 drawing should be described by `scene.keyVisual`, `scene.composition`, and `scene.lighting`.
 - Do not invent factual music-video details unless `wikipediaContext`, lyrics semantics, artist/title, or user-provided notes support them. If facts are thin, use genre/era/stage/costume inference and keep it visibly generic-but-intentional.
 
 Scene contract:
-- `kind` must always be "procedural".
-- Every scene must include: start, end, kind, themeFamily, primaryMotif, secondaryMotifs, motifs, intent, motion, density, accent, visual, clip, actions.
+- `kind` must always be "key-visual".
+- `composition` must be one of: poster, stage-card, room-card, street-card, object-card, portrait-card, world-card.
+- Every scene must include: start, end, kind, composition, themeFamily, primaryMotif, secondaryMotifs, motifs, keyVisual, lighting, intent, motion, density, accent, visual.
 - Generate about {target_count} scenes, covering 0 to {duration:.2f} seconds. Aim for 3-5 scene changes per minute.
 - Scene changes should align with waveform peaks, energy changes, or important lyric entrances.
 - Prefer scene boundaries near supplied bars/sections when possible.
-- Each scene must have one clear subject or staged action. Adjacent scenes may reuse a subject only if the pose/action/composition clearly changes.
+- Each scene must have one clear key visual. Adjacent scenes may reuse a subject only if composition, setting, symbol focus, or lighting clearly changes.
+
+V3 key visual contract:
+- `scene.keyVisual.subject`: one concrete drawable subject, object, place, performer silhouette, symbol, or scene frame.
+- `scene.keyVisual.setting`: specific place or frame.
+- `scene.keyVisual.symbols`: 2-6 concrete props, costume cues, location cues, era cues, or story cues.
+- `scene.keyVisual.foreground`: what should be largest/readable in front.
+- `scene.keyVisual.midground`: support object/shape/layer.
+- `scene.keyVisual.background`: bright setting or environmental shape.
+- `scene.keyVisual.styleNotes`: why this image belongs to this song/artist/context, and how to keep it readable as pixel art.
+
+Lighting contract:
+- `scene.lighting.base`: base color and contrast direction.
+- `scene.lighting.beat`: small pulse behavior on each beat.
+- `scene.lighting.bar`: stronger four-beat behavior: camera push, floor lift, or color shift.
+- `scene.lighting.peak`: short flash/silhouette hit on peaks/onsets.
+- `scene.lighting.quiet`: how to hold the frame during low energy.
+- `scene.lighting.chorus`: how to make chorus/strong sections brighter.
+- `scene.lighting.colors`: object with key/accent/flash/floor hex colors.
+- `scene.lighting.intensity`: 0.2 to 1.4.
 
 Scene intent contract:
 - `scene.intent.subject`: one concrete drawable subject, not an abstract word such as vibe, energy, waveform, emotion, or music.
@@ -2148,40 +2367,28 @@ Scene intent contract:
 - `scene.intent.lyricCue`: a short semantic cue, not a lyric quote.
 - `scene.intent.renderNotes`: concise renderer guidance: composition, scale, subject priority, and what must not be drawn.
 
-Pixel art contract:
-- `scene.clip.subject`: song-specific subject slug, not a renderer key.
-- `scene.clip.styleNotes`: concise notes about pixel style, costume, props, era, genre, MV/story cues, and inferred culture.
-- `scene.clip.sprites`: 2 to 5 hand-authored pixel sprites that are specific to this song. These are the main art. Each sprite must have:
-  - `id`: slug.
-  - `name`: descriptive internal name.
-  - `colors`: object mapping one-character pixel keys to hex colors or color tokens.
-  - `rows`: 10 to 24 strings, each 10 to 32 characters wide. Use "." for transparent pixels. Do not form letters or readable words in rows.
-- Sprites should depict concrete images: performer silhouette/costume cue, important prop, place object, creature, vehicle, room, camera, flower, etc. They must not be abstract equalizers or random blocks.
-- `scene.clip.spritePlacements`: 1 to 5 placements. Fields: id, sprite, x, y, w, h, layer back|mid|front, optional alpha, optional motion. Coordinates/sizes are normalized 0..1.
-- `scene.clip.parts`: optional 0 to 18 environment/glow/floor parts only. Allowed types only: rect, line, poly. Do not use parts as the main subject if a sprite can represent it.
-- Coordinates and sizes are normalized 0..1.
-- Colors are hex (#rrggbb) or tokens: primary, secondary, accent, highlight, shadow, skin, hair, white, black, red, blue, yellow, green, palette0, palette1, palette2, palette3, palette4.
-- rect fields: id, type, x, y, w, h, color, optional alpha, optional motion.
-- line fields: id, type, x1, y1, x2, y2, lineWidth, color, optional alpha, optional motion.
-- poly fields: id, type, points [[x,y],...], color, optional alpha, optional motion.
-- No text, lettering, labels, signage, title cards, captions, watermarks, or readable marks inside the clip artwork. The app renders song title and lyrics separately.
-- motion fields: {{"kind":"beat-pulse|beat-shift|beat-snap|peak-flash|lyric-pop|sway","trigger":"beat|peak|quiet|lyric|intro","axis":"x|y|both|scale|alpha|rotate","amount":0.01,"speed":1,"phase":0}}.
-- `clip.actions` and scene `actions` should target sprite placement ids first, then environment part ids. Waveform hooks must move, scale, brighten, flash, or hold visible artwork.
+Legacy compatibility:
+- You may include `clip` and `actions`, but v3 rendering will prioritize keyVisual/lighting. Do not rely on clip sprites as the main idea.
+- No text, lettering, labels, signage, title cards, captions, watermarks, or readable marks inside the artwork. The app renders song title and lyrics separately.
 
 Creative rules:
 - Make each song different. If lyrics are abstract, lean on artist styling, real MV/stage context, genre, era, and props.
 - For real singers, never draw a realistic portrait. Use non-photorealistic pixel silhouettes, costume blocks, pose language, and props.
 - For an iconic performer, use abstract recognizable cues: hat, glove, socks, jacket blocks, dance lean, mic stand, stage silhouette, etc., only when context supports it.
-- For a narrative video, produce clips that rotate through locations/actions/props from that video, not one crowded collage.
-- Pixel art should feel intentionally composed: big readable shapes, few strong colors, clear foreground subject, beat-reactive parts.
+- For a narrative video, produce key visuals that rotate through locations/actions/props from that video, not one crowded collage.
+- Pixel art should feel intentionally composed: big readable shapes, few strong colors, clear foreground subject, bright beat-reactive lighting.
 
 Output JSON shape:
 {{
+  "version": 3,
   "source": "codex",
+  "vjMode": "key-visual-reactive",
   "themeLabel": "short theme label",
   "mood": "mood",
   "summary": "one sentence visual concept",
   "palette": ["#45f5a1", "#4fd8ff", "#ff5d9d", "#ffd166"],
+  "paletteRoles": {{"background":"#111a3f", "key":"#45f5a1", "accent":"#4fd8ff", "flash":"#fff6b0", "floor":"#ff5d9d", "lyric":"#f4f7fb"}},
+  "brightness": {{"base":0.68, "backgroundLift":0.32, "chorusBoost":0.36, "flash":0.72}},
   "motifs": ["song-specific motif", "costume cue", "place cue"],
   "visualScript": {{
     "logline": "one sentence for the whole visual script",
@@ -2192,16 +2399,36 @@ Output JSON shape:
     "avoid": ["fixed templates", "readable text", "generic waveform art"],
     "palette": ["#45f5a1", "#4fd8ff", "#ff5d9d", "#ffd166"]
   }},
-  "visualDNA": {{"seed": 123456, "engine": "procedural-pixel-mv", "themeFamily": "dance-pop", "rules": ["wiki-context", "waveform-bins", "lyric-cues", "scene-intent", "pixel-sprites"]}},
+  "visualDNA": {{"seed": 123456, "engine": "key-visual-reactive-vj", "themeFamily": "dance-pop", "rules": ["wiki-context", "key-visual", "reactive-lighting", "waveform-bins", "lyric-cues"]}},
   "scenes": [
     {{
       "start": 0,
       "end": 14,
-      "kind": "procedural",
+      "kind": "key-visual",
+      "composition": "stage-card",
       "themeFamily": "dance-pop",
       "primaryMotif": "descriptive-subject-slug",
       "secondaryMotifs": ["prop", "place"],
       "motifs": ["subject", "prop", "action"],
+      "keyVisual": {{
+        "subject": "one concrete readable subject",
+        "setting": "specific place or frame",
+        "symbols": ["prop one", "costume cue", "location cue"],
+        "foreground": "largest subject or object",
+        "midground": "supporting shape or prop",
+        "background": "bright environment or graphic field",
+        "styleNotes": "why this visual belongs to the song and how to draw it as readable pixel art"
+      }},
+      "lighting": {{
+        "base": "base color and contrast direction",
+        "beat": "small pulse behavior on each beat",
+        "bar": "camera push or floor pulse every bar",
+        "peak": "short white/accent flash on peaks",
+        "quiet": "held dimmer frame",
+        "chorus": "brighter background, stronger floor glow, stronger color saturation",
+        "colors": {{"key":"#45f5a1", "accent":"#4fd8ff", "flash":"#fff6b0", "floor":"#ff5d9d"}},
+        "intensity": 0.86
+      }},
       "intent": {{
         "subject": "concrete drawable subject",
         "setting": "specific place or staged environment",
@@ -2217,42 +2444,11 @@ Output JSON shape:
         "lyricCue": "semantic cue, not quoted lyric",
         "renderNotes": "large foreground subject, clear prop silhouette, no text or generic waveform graphics"
       }},
-      "motion": "waveform peaks move named sprite placements",
+      "motion": "waveform peaks drive lighting, flash, floor glow, and small camera pushes",
       "density": 0.8,
       "accent": "what flashes or changes on lyric/beat",
-      "visual": {{"seed": 93217, "layout": "diagonal", "turbulence": 0.72, "symmetry": 0.35, "scale": 1.1, "colorShift": 0.18, "beatLock": "waveform-peaks"}},
-      "clip": {{
-        "subject": "descriptive-subject-slug",
-        "styleNotes": "specific pixel notes from researched song context",
-        "sprites": [
-          {{
-            "id": "main-silhouette",
-            "name": "song specific performer or object silhouette",
-            "colors": {{"K":"black", "S":"skin", "W":"white", "A":"accent", "H":"highlight"}},
-            "rows": [
-              ".................",
-              ".....KKKKK.......",
-              "....KSSSSK.......",
-              ".....SSSS........",
-              "....KKWWKK.......",
-              "...KKKWWKKK......",
-              "..KK..WW..KK.....",
-              ".....KWWK........",
-              "....KK..KK.......",
-              "...WW....WW......",
-              "................."
-            ]
-          }}
-        ],
-        "spritePlacements": [
-          {{"id":"main-subject", "sprite":"main-silhouette", "x":0.34, "y":0.2, "w":0.32, "h":0.52, "layer":"mid", "motion":{{"kind":"beat-snap", "trigger":"beat", "axis":"both", "amount":0.04}}}}
-        ],
-        "parts": [
-          {{"id":"floor-glow", "type":"poly", "points":[[0.18,0.72],[0.78,0.72],[0.9,0.86],[0.08,0.86]], "color":"highlight", "alpha":0.35, "motion":{{"kind":"peak-flash", "trigger":"peak", "axis":"alpha", "amount":0.12}}}}
-        ],
-        "actions": [{{"trigger":"beat", "verb":"pose-snap", "target":"main-subject", "camera":"push-in", "beatResponse":"sprite snaps on waveform peaks"}}]
-      }},
-      "actions": [{{"trigger":"beat", "verb":"pose-snap", "target":"main-subject", "camera":"push-in", "beatResponse":"sprite snaps on waveform peaks"}}]
+      "visual": {{"seed": 93217, "layout": "poster", "turbulence": 0.72, "symmetry": 0.35, "scale": 1.1, "colorShift": 0.18, "beatLock": "waveform-peaks"}},
+      "actions": [{{"trigger":"beat", "verb":"glow", "target":"key-visual", "camera":"push-in", "beatResponse":"key visual light pulses on waveform peaks"}}]
     }}
   ]
 }}

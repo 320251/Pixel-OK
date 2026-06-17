@@ -377,6 +377,7 @@ function visualPlanHasSprites(plan = state.visualPlan) {
     plan &&
       Array.isArray(plan.scenes) &&
       plan.scenes.some((scene) => {
+        if (scene?.keyVisual && typeof scene.keyVisual === "object" && String(scene.keyVisual.subject || "").trim()) return true;
         const clip = scene?.clip || {};
         return Array.isArray(clip.sprites) && clip.sprites.length && Array.isArray(clip.spritePlacements) && clip.spritePlacements.length;
       }),
@@ -2289,6 +2290,183 @@ function proceduralVisualBlock(seed, index, energy) {
   };
 }
 
+const keyVisualCompositions = new Set(["poster", "stage-card", "room-card", "street-card", "object-card", "portrait-card", "world-card"]);
+
+function isHexColor(value) {
+  return /^#([0-9a-f]{6})$/i.test(String(value || "").trim());
+}
+
+function hexLuma(color) {
+  const raw = String(color || "").replace("#", "");
+  if (!/^[0-9a-f]{6}$/i.test(raw)) return 0.5;
+  const red = parseInt(raw.slice(0, 2), 16) / 255;
+  const green = parseInt(raw.slice(2, 4), 16) / 255;
+  const blue = parseInt(raw.slice(4, 6), 16) / 255;
+  return red * 0.2126 + green * 0.7152 + blue * 0.0722;
+}
+
+function ensureVibrantPalette(colors) {
+  const merged = [];
+  [...(Array.isArray(colors) ? colors : []), ...paletteFor(hashText(state.currentTitle || "Pixel OK"))].forEach((color) => {
+    const safe = String(color || "").trim().toLowerCase();
+    if (!isHexColor(safe) || merged.includes(safe) || hexLuma(safe) < 0.18) return;
+    merged.push(safe);
+  });
+  return merged.slice(0, 6).length >= 4 ? merged.slice(0, 6) : paletteFor(hashText("pixel-ok-v3"));
+}
+
+function normalizePaletteRoles(rawRoles, palette) {
+  const safe = ensureVibrantPalette(palette);
+  const fallback = {
+    background: "#111a3f",
+    key: safe[0],
+    accent: safe[1] || safe[0],
+    flash: "#fff6b0",
+    floor: safe[2] || safe[0],
+    lyric: "#f4f7fb",
+  };
+  const raw = rawRoles && typeof rawRoles === "object" ? rawRoles : {};
+  return Object.fromEntries(
+    Object.entries(fallback).map(([key, fallbackColor]) => {
+      const value = String(raw[key] || fallbackColor).trim().toLowerCase();
+      return [key, isHexColor(value) ? value : fallbackColor];
+    }),
+  );
+}
+
+function normalizeBrightness(rawBrightness) {
+  const raw = rawBrightness && typeof rawBrightness === "object" ? rawBrightness : {};
+  return {
+    base: clamp(Number(raw.base ?? 0.68), 0.25, 1),
+    backgroundLift: clamp(Number(raw.backgroundLift ?? raw.background_lift ?? 0.32), 0, 0.8),
+    chorusBoost: clamp(Number(raw.chorusBoost ?? raw.chorus_boost ?? 0.36), 0, 0.9),
+    flash: clamp(Number(raw.flash ?? 0.72), 0, 1),
+  };
+}
+
+function normalizeComposition(rawComposition, fallback = "poster") {
+  const text = String(rawComposition || fallback || "poster").trim().toLowerCase();
+  return keyVisualCompositions.has(text) ? text : keyVisualCompositions.has(fallback) ? fallback : "poster";
+}
+
+function fallbackKeyVisual(themeFamily, motifs = [], index = 0) {
+  const family = normalizeThemeFamilyName(themeFamily);
+  const subject = clipTextToken(motifs[index % Math.max(1, motifs.length)] || state.currentTitle || "song subject", "song subject");
+  const defaults = {
+    "horror-pop": ["moonlit poster frame", ["moon", "eyes", "door", "shadow"]],
+    "romance-pop": ["warm room poster frame", ["heart", "phone", "flower", "lamp"]],
+    "dance-pop": ["bright stage card", ["microphone", "floor light", "spotlight", "speaker"]],
+    "cosmic-world": ["neon world card", ["planet", "star", "horizon", "signal"]],
+    "rain-memory": ["rain window card", ["window", "rain", "reflection", "umbrella"]],
+    "lonely-night": ["midnight room card", ["window", "shadow", "moon", "phone"]],
+    "urban-stage": ["neon street card", ["street light", "speaker", "roofline", "road"]],
+    "song-stage": ["song poster card", ["microphone", "light", "symbol", "floor"]],
+  };
+  const [setting, symbols] = defaults[family] || defaults["song-stage"];
+  return {
+    subject,
+    setting,
+    symbols,
+    foreground: `large readable pixel image of ${subject}`,
+    midground: symbols.slice(0, 2).join(", "),
+    background: setting,
+    styleNotes: "static pixel key visual with bright beat-reactive lighting; no waveform or readable artwork text",
+  };
+}
+
+function normalizeKeyVisual(rawKeyVisual, fallbackKeyVisualValue) {
+  const raw = rawKeyVisual && typeof rawKeyVisual === "object" ? rawKeyVisual : {};
+  const fallback = fallbackKeyVisualValue && typeof fallbackKeyVisualValue === "object" ? fallbackKeyVisualValue : fallbackKeyVisual("song-stage");
+  const symbols = Array.isArray(raw.symbols || raw.props)
+    ? (raw.symbols || raw.props).map((item) => String(item || "").trim()).filter(Boolean).slice(0, 6)
+    : Array.isArray(fallback.symbols)
+      ? fallback.symbols.slice(0, 6)
+      : ["signature prop"];
+  return {
+    subject: clipTextToken(raw.subject || fallback.subject, "song subject"),
+    setting: String(raw.setting || fallback.setting || "song-specific frame").slice(0, 120),
+    symbols,
+    foreground: String(raw.foreground || fallback.foreground || "large foreground subject").slice(0, 140),
+    midground: String(raw.midground || fallback.midground || "supporting props").slice(0, 140),
+    background: String(raw.background || fallback.background || "bright stylized setting").slice(0, 140),
+    styleNotes: String(raw.styleNotes || raw.style_notes || fallback.styleNotes || "pixel key visual").slice(0, 220),
+  };
+}
+
+function normalizeLighting(rawLighting, fallbackLighting, palette) {
+  const raw = rawLighting && typeof rawLighting === "object" ? rawLighting : {};
+  const fallback = fallbackLighting && typeof fallbackLighting === "object" ? fallbackLighting : {};
+  const roles = normalizePaletteRoles(fallback.colors, palette);
+  const rawColors = raw.colors && typeof raw.colors === "object" ? raw.colors : {};
+  const colors = {};
+  ["key", "accent", "flash", "floor"].forEach((key) => {
+    const value = String(rawColors[key] || roles[key] || roles.accent || "#ffffff").trim().toLowerCase();
+    colors[key] = isHexColor(value) ? value : roles[key] || "#ffffff";
+  });
+  return {
+    base: String(raw.base || fallback.base || "bright pixel key light").slice(0, 120),
+    beat: String(raw.beat || fallback.beat || "small glow pulse").slice(0, 120),
+    bar: String(raw.bar || fallback.bar || "camera push and floor lift").slice(0, 120),
+    peak: String(raw.peak || fallback.peak || "brief flash").slice(0, 120),
+    quiet: String(raw.quiet || fallback.quiet || "held dim frame").slice(0, 120),
+    chorus: String(raw.chorus || fallback.chorus || "brighter color lift").slice(0, 120),
+    colors,
+    intensity: clamp(Number(raw.intensity ?? fallback.intensity ?? 0.72), 0.2, 1.4),
+  };
+}
+
+function normalizeSceneTimeline(scenes, fallbackScenes, duration) {
+  const fallback = Array.isArray(fallbackScenes) && fallbackScenes.length ? fallbackScenes : [];
+  const safeDuration = Math.max(1, Number(duration) || 1);
+  let sorted = (Array.isArray(scenes) ? scenes : [])
+    .filter((scene) => scene && Number.isFinite(Number(scene.start)) && Number.isFinite(Number(scene.end)) && Number(scene.end) > Number(scene.start))
+    .map((scene) => ({ ...scene, start: clamp(Number(scene.start), 0, safeDuration), end: clamp(Number(scene.end), 0, safeDuration) }))
+    .filter((scene) => scene.end > scene.start + 0.2)
+    .sort((a, b) => a.start - b.start);
+  if (!sorted.length) sorted = fallback.map((scene) => ({ ...scene }));
+
+  const normalized = [];
+  let cursor = 0;
+  const addFallback = (start, end, index) => {
+    const source = fallback[index % Math.max(1, fallback.length)] || sorted[index % Math.max(1, sorted.length)];
+    if (!source || end - start < 0.35) return;
+    normalized.push({ ...source, start, end });
+  };
+
+  sorted.forEach((scene, index) => {
+    let start = clamp(scene.start, 0, safeDuration);
+    let end = clamp(scene.end, 0, safeDuration);
+    if (start - cursor > 0.5) addFallback(cursor, start, index);
+    if (start < cursor) start = cursor;
+    if (end <= start + 0.35) end = Math.min(safeDuration, start + 0.8);
+    if (end > start) {
+      normalized.push({ ...scene, start, end });
+      cursor = end;
+    }
+  });
+
+  if (!normalized.length) {
+    const count = targetSceneCount(safeDuration);
+    return Array.from({ length: count }, (_, index) => {
+      const start = (safeDuration * index) / count;
+      const end = index === count - 1 ? safeDuration : (safeDuration * (index + 1)) / count;
+      const source = fallback[index % Math.max(1, fallback.length)] || {};
+      return { ...source, start, end };
+    });
+  }
+  normalized.sort((a, b) => a.start - b.start);
+  if (normalized[0].start < 0.5) normalized[0].start = 0;
+  else {
+    const firstStart = normalized[0].start;
+    const source = fallback[0] || normalized[0];
+    normalized.unshift({ ...source, start: 0, end: firstStart });
+  }
+  const last = normalized[normalized.length - 1];
+  if (safeDuration - last.end > 0.5) addFallback(last.end, safeDuration, normalized.length);
+  else last.end = safeDuration;
+  return normalized.sort((a, b) => a.start - b.start);
+}
+
 function clipTextToken(value, fallback = "") {
   return String(value ?? fallback).trim().slice(0, 28);
 }
@@ -2548,7 +2726,9 @@ function fallbackVisualProfile(duration = estimateDuration(), waveform = state.w
   const seed = hashText(`${state.currentTitle}|${lyricsInput.value}|${waveform?.signature || "no-wave"}`);
   const motifs = extractVisualTokens();
   const themeFamily = detectThemeFamily(`${state.currentTitle}\n${lyricsInput.value}\n${motifs.join(" ")}`);
-  const palette = paletteFor(seed);
+  const palette = ensureVibrantPalette(paletteFor(seed));
+  const paletteRoles = normalizePaletteRoles(null, palette);
+  const brightness = normalizeBrightness(null);
   const count = targetSceneCount(duration);
   const scenes = Array.from({ length: count }, (_, index) => {
     const start = (duration * index) / count;
@@ -2556,14 +2736,36 @@ function fallbackVisualProfile(duration = estimateDuration(), waveform = state.w
     const energy = waveformHintForScene(waveform, index, count);
     const sceneMotifs = Array.from({ length: Math.min(4, motifs.length) }, (_, offset) => motifs[(index + offset) % motifs.length]);
     const clip = genericSceneClip(seed, index, energy, sceneMotifs, themeFamily);
+    const keyVisual = fallbackKeyVisual(themeFamily, sceneMotifs, index);
+    const lighting = normalizeLighting(null, { intensity: 0.55 + energy * 0.4, colors: paletteRoles }, palette);
+    const composition = normalizeComposition(["stage-card", "poster", "object-card", "street-card"][index % 4]);
     return {
       start,
       end,
-      kind: "procedural",
+      kind: "key-visual",
+      composition,
       themeFamily,
+      primaryMotif: String(sceneMotifs[0] || keyVisual.subject || "song-subject").toLowerCase().replace(/[^a-z0-9_-]+/g, "-"),
       secondaryMotifs: sceneMotifs.slice(0, 2),
       motifs: sceneMotifs.slice(0, 5),
-      motion: "the generic pixel clip shifts, scales, flashes, and brightens from waveform energy, beat peaks, and lyric hits",
+      keyVisual,
+      lighting,
+      intent: {
+        subject: keyVisual.subject,
+        setting: keyVisual.setting,
+        action: "hold the key visual while light, floor, and camera react to the music",
+        props: keyVisual.symbols,
+        palette,
+        lighting: lighting.base,
+        camera: index % 2 ? "push-in" : "hold",
+        rhythmTriggers: [
+          { trigger: "beat", target: keyVisual.subject, effect: "small glow pulse" },
+          { trigger: "peak", target: keyVisual.symbols[0] || keyVisual.subject, effect: "brief flash" },
+        ],
+        lyricCue: "semantic song image",
+        renderNotes: "one readable key visual, bright reactive lighting, no waveform art or readable text",
+      },
+      motion: "key visual stays readable while waveform drives lighting, flashes, floor glow, and small scale pulses",
       density: Number((0.38 + energy * 0.82).toFixed(3)),
       accent: "waveform peak",
       visual: proceduralVisualBlock(seed, index, energy),
@@ -2572,22 +2774,26 @@ function fallbackVisualProfile(duration = estimateDuration(), waveform = state.w
   });
 
   return {
+    version: 3,
     source: "fallback",
+    vjMode: "key-visual-reactive",
     themeLabel: `视觉 DNA ${(seed & 0xffff).toString(16).padStart(4, "0")}`,
     mood: "song-reactive",
-    summary: "无固定歌曲模板；先按歌词和歌名选可画主体，再用波形驱动动作、爆发和切段。",
+    summary: "无固定歌曲模板；先按歌词和歌名选主视觉，再用波形驱动灯光、闪白、镜头和切段。",
     palette,
+    paletteRoles,
+    brightness,
     motifs: motifs.slice(0, 8),
     visualDNA: {
       seed,
-      engine: "procedural-pixel-mv",
+      engine: "key-visual-reactive-vj",
       themeFamily,
-      rules: ["waveform-bins", "lyric-cues", "per-song-seed", "scene-intent", "pixel-sprites"],
+      rules: ["key-visual", "reactive-lighting", "waveform-bins", "lyric-cues", "per-song-seed", "scene-intent"],
     },
     visualScript: {
-      logline: "song-specific pixel sprites staged against a beat-reactive pixel set",
-      artDirection: "large readable pixel subjects, solid glowing tiles, no readable artwork text",
-      motionStrategy: "sprites scale, snap, flash, and drift from waveform peaks and lyric entries",
+      logline: "song-specific key visuals staged against beat-reactive light",
+      artDirection: "large readable pixel key visual, solid glowing tiles, brighter background, no readable artwork text",
+      motionStrategy: "lighting, floor glow, camera pulse, and flashes respond to waveform peaks and lyric entries",
     },
     scenes,
   };
@@ -2610,7 +2816,9 @@ function normalizeSceneVisual(rawVisual, fallbackVisual) {
 function normalizeVisualProfile(profile, duration = estimateDuration(), waveform = null) {
   const fallback = fallbackVisualProfile(duration, waveform);
   const source = profile && typeof profile === "object" ? profile : fallback;
-  const palette = Array.isArray(source.palette) && source.palette.length >= 3 ? source.palette.slice(0, 6) : fallback.palette;
+  const palette = ensureVibrantPalette(Array.isArray(source.palette) && source.palette.length >= 3 ? source.palette.slice(0, 6) : fallback.palette);
+  const paletteRoles = normalizePaletteRoles(source.paletteRoles || source.palette_roles, palette);
+  const brightness = normalizeBrightness(source.brightness);
   const sourceThemeFamily = normalizeThemeFamilyName(source.themeFamily || source.visualDNA?.themeFamily || fallback.visualDNA?.themeFamily || detectThemeFamily());
   let scenes = Array.isArray(source.scenes) ? source.scenes : [];
   scenes = scenes
@@ -2618,12 +2826,19 @@ function normalizeVisualProfile(profile, duration = estimateDuration(), waveform
       const fallbackScene = fallback.scenes[index % fallback.scenes.length];
       const themeFamily = normalizeThemeFamilyName(scene.themeFamily || sourceThemeFamily || fallbackScene.themeFamily || "song-stage");
       const sceneMotifs = Array.isArray(scene.motifs) ? scene.motifs.slice(0, 5).map((item) => String(item).slice(0, 32)) : fallbackScene.motifs;
+      const composition = normalizeComposition(scene.composition, fallbackScene.composition || "poster");
+      const keyVisual = normalizeKeyVisual(scene.keyVisual || scene.key_visual, fallbackScene.keyVisual || fallbackKeyVisual(themeFamily, sceneMotifs, index));
+      const lighting = normalizeLighting(scene.lighting, fallbackScene.lighting, palette);
       return {
         start: clamp(Number(scene.start ?? (duration * index) / Math.max(1, scenes.length)), 0, duration),
         end: clamp(Number(scene.end ?? (duration * (index + 1)) / Math.max(1, scenes.length)), 0, duration),
-        kind: "procedural",
+        kind: "key-visual",
+        composition,
         themeFamily,
         intent: scene.intent && typeof scene.intent === "object" ? { ...scene.intent } : fallbackScene.intent || null,
+        keyVisual,
+        lighting,
+        primaryMotif: String(scene.primaryMotif || scene.primary_motif || fallbackScene.primaryMotif || keyVisual.subject || "song-subject").slice(0, 48),
         secondaryMotifs: Array.isArray(scene.secondaryMotifs) ? scene.secondaryMotifs.slice(0, 3).map((item) => String(item).slice(0, 32)) : fallbackScene.secondaryMotifs || [],
         motifs: sceneMotifs,
         motion: String(scene.motion || "waveform reactive").slice(0, 120),
@@ -2637,42 +2852,22 @@ function normalizeVisualProfile(profile, duration = estimateDuration(), waveform
 
   if (!scenes.length) scenes = fallback.scenes;
   scenes.sort((a, b) => a.start - b.start);
-  scenes[0].start = 0;
-  scenes[scenes.length - 1].end = duration;
-
-  const desiredCount = targetSceneCount(duration);
-  const pacedScenes = Array.from({ length: desiredCount }, (_, index) => {
-    const start = (duration * index) / desiredCount;
-    const end = index === desiredCount - 1 ? duration : (duration * (index + 1)) / desiredCount;
-    const midpoint = start + (end - start) / 2;
-    const sourceScene =
-      scenes.find((scene) => midpoint >= scene.start && midpoint < scene.end) ||
-      scenes[Math.min(index, scenes.length - 1)] ||
-      fallback.scenes[index % fallback.scenes.length];
-    const themeFamily = normalizeThemeFamilyName(sourceScene.themeFamily || sourceThemeFamily);
-    const motifs = Array.isArray(sourceScene.motifs) ? sourceScene.motifs : [];
-    return {
-      ...sourceScene,
-      start,
-      end,
-      themeFamily,
-      motifs: motifs.slice(0, 5),
-      density: clamp(Number(sourceScene.density || 0.72) * (0.92 + (index % 3) * 0.08), 0.2, 1.4),
-      clip: sanitizeSceneClip(sourceScene.clip, fallback.scenes[index % fallback.scenes.length]?.clip),
-      kind: "procedural",
-    };
-  });
+  scenes = normalizeSceneTimeline(scenes, fallback.scenes, duration);
 
   return {
+    version: Number(source.version || 3),
     source: source.source || fallback.source,
+    vjMode: source.vjMode || source.vj_mode || fallback.vjMode || "key-visual-reactive",
     themeLabel: source.themeLabel || fallback.themeLabel,
     mood: source.mood || fallback.mood,
     summary: source.summary || fallback.summary,
     palette,
+    paletteRoles,
+    brightness,
     motifs: Array.isArray(source.motifs) ? source.motifs.slice(0, 8) : fallback.motifs,
     visualScript: source.visualScript && typeof source.visualScript === "object" ? { ...source.visualScript } : fallback.visualScript,
     visualDNA: source.visualDNA && typeof source.visualDNA === "object" ? { ...source.visualDNA, themeFamily: sourceThemeFamily } : fallback.visualDNA,
-    scenes: pacedScenes,
+    scenes,
     duration,
     waveform: waveform || source.waveform || null,
     cueSignature: cueSignature(),
@@ -2727,7 +2922,7 @@ async function requestVisualPlan(duration = estimateDuration(), options = {}) {
     state.visualPlanKey = key;
     const source = state.visualPlan.source === "codex" ? "Codex 分镜" : "本地兜底";
     const perMinute = ((state.visualPlan.scenes.length / Math.max(duration, 1)) * 60).toFixed(1);
-    setStatus(contentStatus, `已使用${source}：${state.visualPlan.themeLabel}，${state.visualPlan.scenes.length} 个图案段落，约 ${perMinute} 段/分钟；${waveform ? "波形已接入" : "等待波形"}。`);
+    setStatus(contentStatus, `已使用${source}：${state.visualPlan.themeLabel}，${state.visualPlan.scenes.length} 个主视觉段落，约 ${perMinute} 段/分钟；${waveform ? "波形已接入" : "等待波形"}。`);
   } catch (error) {
     state.visualPlan = normalizeVisualProfile(null, duration, waveform);
     state.visualPlanKey = key;
@@ -2932,7 +3127,7 @@ function visualEnergy(time, cue, seed, profile) {
   const lyricHit = cue ? Math.max(0, 1 - Math.abs(cueProgress(cue, time) - 0.08) / 0.16) : 0;
   const peakHit = waveformPeakPulse(profile, time);
   const beatRate = 1.35 + seeded(seed, 4) * 1.15;
-  const clock = 0.06 + 0.08 * Math.max(0, Math.sin(time * Math.PI * 2 * beatRate));
+  const clock = 0.02 + 0.025 * Math.max(0, Math.sin(time * Math.PI * 2 * beatRate));
   return clamp(audioEnergy + peakHit * 0.42 + rhythm.beat * 0.2 + rhythm.bar * 0.24 + rhythm.onset * 0.18 + lyricHit * 0.34 + clock, 0, 1);
 }
 
@@ -2980,6 +3175,14 @@ function stageLine(w, h, x1, y1, x2, y2, color, alpha = 1, lineWidth = 2) {
 
 function stagePoly(w, h, points, color, alpha = 1) {
   fillPolygon(points.map(([x, y]) => stagePoint(w, h, x, y)), color, alpha);
+}
+
+function stagePixelDisk(w, h, cx, cy, radius, color, alpha = 1, step = 3) {
+  const safeRadius = Math.max(1, radius);
+  for (let y = -safeRadius; y <= safeRadius; y += step) {
+    const half = Math.sqrt(Math.max(0, safeRadius * safeRadius - y * y));
+    stageRect(w, h, cx - half, cy + y, half * 2, Math.max(1, step), color, alpha);
+  }
 }
 
 function expandStagePoints(points, amount) {
@@ -3306,6 +3509,238 @@ function drawSceneClip(clip, w, h, time, seed, palette, energy, beatBurst, inten
   }
 }
 
+function keyVisualText(segment) {
+  const visual = segment?.keyVisual || {};
+  return [
+    visual.subject,
+    visual.setting,
+    Array.isArray(visual.symbols) ? visual.symbols.join(" ") : "",
+    visual.foreground,
+    visual.midground,
+    visual.background,
+    visual.styleNotes,
+    segment?.themeFamily,
+    segment?.primaryMotif,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function textHasAny(text, words) {
+  return words.some((word) => text.includes(word));
+}
+
+function drawReactiveVjBackground(w, h, time, profile, segment, palette, energy, beatBurst, seed, rhythm = {}) {
+  const roles = profile.paletteRoles || normalizePaletteRoles(null, palette);
+  const brightness = normalizeBrightness(profile.brightness);
+  const sectionLabel = String(rhythm.section?.label || "").toLowerCase();
+  const chorusLift = /chorus|hook|drop|peak/.test(sectionLabel) ? brightness.chorusBoost : 0;
+  const barHit = clamp(Number(rhythm.bar) || 0, 0, 1);
+  const onsetHit = clamp(Number(rhythm.onset) || 0, 0, 1);
+  const hit = clamp(energy * 0.48 + beatBurst * 0.72 + barHit * 0.38 + onsetHit * 0.26 + chorusLift, 0, 1.65);
+  const push = Math.round(barHit * 3 + beatBurst * 2);
+  const background = roles.background || "#111a3f";
+  rect(0, 0, w, h, background, 1);
+  rect(0, 0, w, h, palette[1] || roles.accent, brightness.backgroundLift * 0.18 + hit * 0.04);
+  rect(0, 0, w, h * 0.56, palette[0] || roles.key, 0.04 + hit * 0.045);
+
+  for (let y = 4 - push; y < 238; y += 4) {
+    stageRect(w, h, 0, y, 320, 1, y % 16 === 0 ? roles.flash : palette[(y / 4) % palette.length], 0.012 + hit * 0.016);
+  }
+
+  const left = segment?.lighting?.colors?.key || roles.key || palette[0];
+  const right = segment?.lighting?.colors?.accent || roles.accent || palette[1];
+  stagePoly(w, h, [[18, 0], [56, 0], [114 + push, 138], [76, 147]], left, 0.11 + hit * 0.13);
+  stagePoly(w, h, [[264, 0], [306, 0], [216 - push, 147], [184, 138]], right, 0.11 + hit * 0.13);
+  stagePoly(w, h, [[0, 130 + push], [320, 130 + push], [320, 240], [0, 240]], "#050814", 0.64);
+
+  const floor = segment?.lighting?.colors?.floor || roles.floor || palette[2];
+  for (let row = 0; row < 4; row += 1) {
+    const y = 148 + row * 19 + push;
+    const alpha = 0.22 + row * 0.03 + hit * 0.11;
+    for (let x = -20 + (row % 2) * 18; x < 340; x += 44) {
+      const color = palette[(row + Math.floor(x / 44) + seed) % palette.length] || floor;
+      stagePoly(w, h, [[x, y], [x + 34, y - 6], [x + 52, y + 9], [x + 12, y + 16]], color, alpha);
+    }
+  }
+  stagePoly(w, h, [[58, 150 + push], [262, 150 + push], [300, 205], [20, 205]], floor, 0.09 + hit * 0.1);
+}
+
+function drawVjPerformer(w, h, terms, palette, seed, energy, beatBurst) {
+  const cx = 160 + Math.sin(seed) * 8;
+  const pulse = 1 + beatBurst * 0.045 + energy * 0.025;
+  const hat = textHasAny(terms, ["hat", "cap", "fedora", "crown"]);
+  const jacket = textHasAny(terms, ["jacket", "suit", "coat", "uniform"]);
+  stageRect(w, h, cx - 34, 54, 68, 7, "#020306", 0.72);
+  if (hat) stageRect(w, h, cx - 22, 42, 44, 10, "#020306", 0.95);
+  stageRect(w, h, cx - 14 * pulse, 60, 28 * pulse, 26, "#ffd1a3", 0.98);
+  stageRect(w, h, cx - 20 * pulse, 88, 40 * pulse, 58, jacket ? palette[2] || "#ff5d9d" : palette[0] || "#45f5a1", 0.93);
+  stageRect(w, h, cx - 7, 91, 14, 55, "#f4f7fb", 0.8);
+  stageLine(w, h, cx - 20, 98, cx - 62 - beatBurst * 7, 116 - energy * 8, palette[1] || "#4fd8ff", 0.9, 5);
+  stageLine(w, h, cx + 20, 98, cx + 62 + beatBurst * 8, 110 - energy * 6, palette[3] || "#ffd166", 0.9, 5);
+  stageLine(w, h, cx + 66, 104, cx + 66, 151, "#f4f7fb", 0.72, 3);
+  stageRect(w, h, cx + 60, 102, 14, 7, palette[1] || "#4fd8ff", 0.9);
+  stageLine(w, h, cx - 8, 144, cx - 31, 195 + beatBurst * 4, "#f4f7fb", 0.9, 6);
+  stageLine(w, h, cx + 8, 144, cx + 31, 195 - beatBurst * 4, "#f4f7fb", 0.9, 6);
+  stageRect(w, h, cx - 50, 204, 100, 7, palette[1] || "#4fd8ff", 0.22 + beatBurst * 0.14);
+}
+
+function drawVjHeart(w, h, palette, energy, beatBurst) {
+  const hit = 1 + beatBurst * 0.08 + energy * 0.04;
+  const cx = 160;
+  const cy = 104;
+  const color = palette[2] || "#ff5d9d";
+  stagePixelDisk(w, h, cx - 28 * hit, cy - 10, 28 * hit, color, 0.94, 3);
+  stagePixelDisk(w, h, cx + 28 * hit, cy - 10, 28 * hit, color, 0.94, 3);
+  stagePoly(w, h, [[cx - 64 * hit, cy], [cx + 64 * hit, cy], [cx, cy + 75 * hit]], color, 0.96);
+  stagePixelDisk(w, h, cx, cy + 8, 18 * hit, palette[3] || "#ffd166", 0.24 + beatBurst * 0.16, 4);
+  stageRect(w, h, cx - 82, cy + 92, 164, 7, palette[1] || "#4fd8ff", 0.18 + beatBurst * 0.16);
+}
+
+function drawVjWindowRain(w, h, palette, energy, beatBurst, seed, time) {
+  stageRect(w, h, 88, 42, 144, 106, "#091126", 0.94);
+  stageRect(w, h, 96, 50, 60, 90, palette[1] || "#4fd8ff", 0.13 + beatBurst * 0.08);
+  stageRect(w, h, 164, 50, 60, 90, palette[0] || "#45f5a1", 0.11 + energy * 0.08);
+  stageLine(w, h, 160, 42, 160, 148, "#f4f7fb", 0.28, 3);
+  stageLine(w, h, 88, 95, 232, 95, "#f4f7fb", 0.22, 3);
+  stagePixelDisk(w, h, 206, 68, 19, palette[3] || "#ffd166", 0.72 + beatBurst * 0.14, 3);
+  for (let index = 0; index < 20; index += 1) {
+    const x = 80 + seeded(seed + 21, index) * 160;
+    const y = 34 + ((timeSeed(seed, index) + index * 17 + time * 45 + energy * 24) % 110);
+    stageLine(w, h, x, y, x - 8, y + 18, palette[1] || "#4fd8ff", 0.2 + beatBurst * 0.08, 1);
+  }
+  stageRect(w, h, 66, 160, 188, 8, palette[2] || "#ff5d9d", 0.18 + beatBurst * 0.14);
+}
+
+function timeSeed(seed, index) {
+  return Math.floor(seeded(seed, index) * 997);
+}
+
+function drawVjStreet(w, h, palette, seed, energy, beatBurst) {
+  for (let index = 0; index < 10; index += 1) {
+    const bw = 15 + seeded(seed + 4, index) * 22;
+    const bh = 28 + seeded(seed + 8, index) * 70;
+    const x = index * 34 - 12;
+    stageRect(w, h, x, 128 - bh, bw, bh, "#050814", 0.82);
+    for (let y = 132 - bh; y < 122; y += 15) {
+      if (seeded(seed + y, index) > 0.48) stageRect(w, h, x + 4, y, 4, 5, palette[3] || "#ffd166", 0.36 + beatBurst * 0.12);
+    }
+  }
+  stagePoly(w, h, [[112, 128], [208, 128], [278, 218], [42, 218]], "#05070b", 0.72);
+  stageLine(w, h, 160, 130, 160, 218, palette[3] || "#ffd166", 0.24 + beatBurst * 0.2, 3);
+  stageRect(w, h, 62, 112, 10, 60, palette[1] || "#4fd8ff", 0.5 + energy * 0.16);
+  stagePixelDisk(w, h, 67, 104, 13, palette[1] || "#4fd8ff", 0.48 + beatBurst * 0.2, 3);
+}
+
+function drawVjRecord(w, h, palette, energy, beatBurst) {
+  const cx = 156;
+  const cy = 115;
+  const radius = 58 + beatBurst * 5;
+  stagePixelDisk(w, h, cx, cy, radius, "#05070b", 0.96, 3);
+  stagePixelDisk(w, h, cx, cy, radius * 0.72, palette[1] || "#4fd8ff", 0.18 + energy * 0.06, 4);
+  stagePixelDisk(w, h, cx, cy, 18 + beatBurst * 2, palette[3] || "#ffd166", 0.92, 3);
+  stageLine(w, h, 226, 68, 196 - beatBurst * 4, 116, palette[2] || "#ff5d9d", 0.76, 5);
+  stageRect(w, h, 82, 184, 164, 8, palette[0] || "#45f5a1", 0.18 + beatBurst * 0.18);
+}
+
+function drawVjPlanet(w, h, palette, seed, energy, beatBurst) {
+  const cx = 160;
+  const cy = 102;
+  stagePixelDisk(w, h, cx, cy, 44 + beatBurst * 4, palette[1] || "#4fd8ff", 0.9, 3);
+  stagePoly(w, h, [[82, 111], [238, 82], [246, 96], [91, 126]], palette[3] || "#ffd166", 0.52 + beatBurst * 0.16);
+  stagePixelDisk(w, h, cx - 12, cy - 10, 12, palette[0] || "#45f5a1", 0.28 + energy * 0.1, 3);
+  for (let index = 0; index < 18; index += 1) {
+    const x = 32 + seeded(seed + 77, index) * 256;
+    const y = 30 + seeded(seed + 91, index) * 120;
+    drawPixelSpark(w, h, x, y, 2 + seeded(seed, index) * 3, palette[index % palette.length], 0.32 + beatBurst * 0.22);
+  }
+}
+
+function drawVjCamera(w, h, palette, energy, beatBurst) {
+  stageRect(w, h, 88, 68, 142, 92, palette[0] || "#45f5a1", 0.9);
+  stageRect(w, h, 108, 54, 58, 18, palette[2] || "#ff5d9d", 0.86);
+  stagePixelDisk(w, h, 160, 114, 35 + beatBurst * 4, "#05070b", 0.88, 3);
+  stagePixelDisk(w, h, 160, 114, 18 + energy * 5, palette[1] || "#4fd8ff", 0.74 + beatBurst * 0.18, 3);
+  stageRect(w, h, 196, 82, 18, 10, palette[3] || "#ffd166", 0.9);
+}
+
+function drawVjHorror(w, h, palette, seed, energy, beatBurst) {
+  stagePixelDisk(w, h, 226, 62, 28, palette[3] || "#ffd166", 0.72 + beatBurst * 0.12, 3);
+  stageRect(w, h, 82, 80, 58, 78, "#05070b", 0.94);
+  stageRect(w, h, 96, 96, 12, 8, palette[2] || "#ff5d9d", 0.78 + beatBurst * 0.22);
+  stageRect(w, h, 116, 96, 12, 8, palette[2] || "#ff5d9d", 0.78 + beatBurst * 0.22);
+  stageLine(w, h, 132, 152, 164 + beatBurst * 8, 174 - energy * 6, "#f4f7fb", 0.78, 5);
+  stageLine(w, h, 170, 156, 198 + beatBurst * 6, 140, palette[1] || "#4fd8ff", 0.5, 4);
+}
+
+function drawVjFlower(w, h, palette, energy, beatBurst) {
+  const cx = 160;
+  const cy = 92;
+  for (let index = 0; index < 6; index += 1) {
+    const angle = (Math.PI * 2 * index) / 6;
+    stagePixelDisk(w, h, cx + Math.cos(angle) * (24 + beatBurst * 4), cy + Math.sin(angle) * (20 + beatBurst * 3), 18, palette[2] || "#ff5d9d", 0.82, 3);
+  }
+  stagePixelDisk(w, h, cx, cy, 16, palette[3] || "#ffd166", 0.9, 3);
+  stageLine(w, h, cx, cy + 18, cx - 8, 178, palette[0] || "#45f5a1", 0.78, 5);
+  stagePoly(w, h, [[cx - 12, 135], [cx - 54, 122], [cx - 18, 150]], palette[0] || "#45f5a1", 0.64);
+  stagePoly(w, h, [[cx - 6, 148], [cx + 48, 134], [cx + 14, 164]], palette[1] || "#4fd8ff", 0.52);
+}
+
+function drawStaticKeyVisual(w, h, segment, palette, seed, energy, beatBurst, time = 0) {
+  const terms = keyVisualText(segment);
+  if (textHasAny(terms, ["ghost", "monster", "zombie", "wolf", "horror", "terror", "grave", "nightmare", "鬼", "狼", "僵尸", "怪物"])) {
+    drawVjHorror(w, h, palette, seed, energy, beatBurst);
+  } else if (textHasAny(terms, ["heart", "love", "lover", "girl", "baby", "kiss", "rose", "romance", "爱情", "女孩", "心"])) {
+    drawVjHeart(w, h, palette, energy, beatBurst);
+  } else if (textHasAny(terms, ["rain", "window", "storm", "umbrella", "tears", "room", "bedroom", "雨", "窗", "伞"])) {
+    drawVjWindowRain(w, h, palette, energy, beatBurst, seed, time);
+  } else if (textHasAny(terms, ["street", "city", "road", "car", "subway", "train", "neon", "downtown", "城市", "街", "车", "路"])) {
+    drawVjStreet(w, h, palette, seed, energy, beatBurst);
+  } else if (textHasAny(terms, ["record", "vinyl", "disc", "cd", "radio", "speaker", "turntable", "唱片", "碟", "音箱"])) {
+    drawVjRecord(w, h, palette, energy, beatBurst);
+  } else if (textHasAny(terms, ["planet", "star", "moon", "sky", "world", "space", "dream", "宇宙", "星", "月", "世界"])) {
+    drawVjPlanet(w, h, palette, seed, energy, beatBurst);
+  } else if (textHasAny(terms, ["camera", "movie", "film", "photo", "scene", "镜头", "电影", "照片"])) {
+    drawVjCamera(w, h, palette, energy, beatBurst);
+  } else if (textHasAny(terms, ["flower", "rose", "garden", "bloom", "花", "玫瑰"])) {
+    drawVjFlower(w, h, palette, energy, beatBurst);
+  } else {
+    drawVjPerformer(w, h, terms, palette, seed, energy, beatBurst);
+  }
+}
+
+function drawVjFlashOverlay(w, h, profile, segment, palette, energy, beatBurst, cueFlash = 0) {
+  const roles = profile.paletteRoles || normalizePaletteRoles(null, palette);
+  const brightness = normalizeBrightness(profile.brightness);
+  const flashColor = segment?.lighting?.colors?.flash || roles.flash || "#fff6b0";
+  const flash = clamp(beatBurst * brightness.flash * 0.12 + Math.max(0, energy - 0.82) * 0.12 + cueFlash * 0.09, 0, 0.28);
+  if (flash > 0.01) rect(0, 0, w, h, flashColor, flash);
+  if (beatBurst > 0.24) {
+    strokeRect(24, 24, w - 48, h - 82, segment?.lighting?.colors?.key || roles.key || palette[0], 0.08 + beatBurst * 0.14, 3);
+  }
+}
+
+function drawKeyVisualVjScene(w, h, time, cue, cueIndex, progress, profile, segment, palette, seed, energy, beatBurst, intensity) {
+  const rhythm = rhythmStateAt(profile, time);
+  const reactiveBeat = Math.max(beatBurst, rhythm.beat * 0.72, rhythm.bar * 1.08, rhythm.onset * 0.82);
+  drawReactiveVjBackground(w, h, time, profile, segment, palette, energy, reactiveBeat, seed, rhythm);
+  const push = 1 + rhythm.bar * 0.025 + reactiveBeat * 0.018;
+  const shake = reactiveBeat > 0.7 ? Math.sin(time * 44 + seed) * 3 * intensity : 0;
+  ctx2d.save();
+  try {
+    ctx2d.translate(w / 2 + shake, h * 0.48);
+    ctx2d.scale(push, push);
+    ctx2d.translate(-w / 2, -h * 0.48);
+    drawStaticKeyVisual(w, h, segment, palette, seed, energy, reactiveBeat, time);
+  } finally {
+    ctx2d.restore();
+  }
+  const cueFlash = cue ? Math.max(0, 1 - progress * 5) : 0;
+  drawVjFlashOverlay(w, h, profile, segment, palette, energy, reactiveBeat, cueFlash);
+  return { palette, energy, scene: "key-visual-v3" };
+}
+
 function drawGeneratedScene(w, h, time, cue, cueIndex, progress) {
   const fallbackSeed = hashText(`${state.currentTitle}:emergency`);
   try {
@@ -3325,6 +3760,9 @@ function drawGeneratedScene(w, h, time, cue, cueIndex, progress) {
     const burst = Math.max(waveformPeakPulse(profile, time), rhythm.beat * 0.65, rhythm.bar * 0.92, rhythm.onset * 0.72);
 
     drawScreenBase(w, h, time, palette, energy, intensity);
+    if (segment.kind === "key-visual" || segment.keyVisual) {
+      return drawKeyVisualVjScene(w, h, time, cue, cueIndex, progress, profile, segment, palette, themeSeed, energy, burst, intensity);
+    }
     if (drawPixelSpriteScene(segment.clip, w, h, time, themeSeed, profile, segment, palette, energy, burst, intensity)) {
       const cueFlash = cue ? Math.max(0, 1 - progress * 5) : 0;
       if (cueFlash > 0) {
@@ -4390,10 +4828,16 @@ async function runPixelAutoPipeline(file, options = {}) {
     }
 
     if (!state.backingUrl || !state.leadUrl) {
-      if (!state.capabilities.uvr) throw new Error("UVR 分轨不可用，已停在工程后台可接管的状态。");
-      setPixelWorkflow("项目已创建，正在三轨分离。", { running: true });
-      await splitSong();
-      await waitFor(() => Boolean(state.backingUrl && state.leadUrl), 30 * 60 * 1000, "分轨仍在进行或已失败，请切到工程后台查看。");
+      if (state.capabilities.uvr) {
+        setPixelWorkflow("三轨分离已交给后台；先用原曲继续做歌词和动画。", { running: true });
+        try {
+          await splitSong();
+        } catch (error) {
+          setStatus(splitStatus, error.message || "分轨启动失败；动画会先用原曲继续。");
+        }
+      } else {
+        setPixelWorkflow("UVR 暂不可用；先用原曲做歌词和动画，录音伴奏稍后再处理。", { running: true });
+      }
     }
 
     let lyricPath = "";
@@ -4437,7 +4881,11 @@ async function runPixelAutoPipeline(file, options = {}) {
       throw new Error("动画还没有准备好。TODO：切到工程后台查看歌词/分镜状态。");
     }
 
-    setPixelWorkflow("准备好了。按录音键，电视会跟着伴奏跑动画。", { running: false });
+    if (state.backingUrl) {
+      setPixelWorkflow("准备好了。按录音键，电视会跟着伴奏跑动画。", { running: false });
+    } else {
+      setPixelWorkflow("歌词和动画已准备；三轨还没完成，所以现在可以先预览电视画面，录音要等伴奏出来。", { running: false });
+    }
   } catch (error) {
     setPixelWorkflow("", {
       running: false,
