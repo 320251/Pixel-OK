@@ -1,0 +1,5 @@
+# Optional and heavy. Run install_ai_models.bat only when you want AI stem
+# separation. Basic Pitch is attempted separately because some releases are
+# picky about Python versions.
+demucs>=4.0.1
+torchcrepe==0.0.24

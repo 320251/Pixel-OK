@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pixel OK</title>
+    <link rel="stylesheet" href="/static/style.css?v=stem-download-1" />
+  </head>
+  <body data-view="pixel">
+    <nav class="view-switch" aria-label="界面切换">
+      <button id="showPixelFrontButton" class="active" type="button" data-view-target="pixel">Pixel 前台</button>
+      <button id="showStudioBackButton" type="button" data-view-target="studio">工程后台</button>
+    </nav>
+
+    <section class="pixel-front" id="pixelFront" aria-label="Pixel 前台">
+      <header class="pixel-marquee">
+        <div>
+          <p class="pixel-kicker">PIXEL KARAOKE BOOTH</p>
+          <h1>Pixel OK</h1>
+        </div>
+        <p id="pixelFrontStatus">填歌手和歌名，拖入原歌或点制作，前台会自动完成分轨、字幕和动画。</p>
+      </header>
+
+      <div class="pixel-room">
+        <section class="pixel-tv" aria-label="老式电视机">
+          <div class="tv-case">
+            <div class="tv-glass">
+              <canvas id="pixelFrontScreen" width="960" height="720"></canvas>
+              <div class="tv-idle" id="pixelTvIdle">CH 03</div>
+            </div>
+            <div class="tv-side">
+              <span></span>
+              <span></span>
+              <span></span>
+              <div class="tv-speaker"></div>
+            </div>
+          </div>
+          <div class="tv-feet" aria-hidden="true">
+            <span></span>
+            <span></span>
+          </div>
+        </section>
+
+        <section class="pixel-deck" aria-label="CD 播放器">
+          <div class="pixel-maker">
+            <label>
+              <span>歌手</span>
+              <input id="pixelArtistInput" type="text" autocomplete="off" placeholder="artist" />
+            </label>
+            <label>
+              <span>歌名</span>
+              <input id="pixelTitleInput" type="text" autocomplete="off" placeholder="title" />
+            </label>
+            <button id="pixelMakeButton" type="button">制作</button>
+          </div>
+
+          <label class="pixel-drop" id="pixelDropzone" for="pixelSongFile">
+            <input id="pixelSongFile" type="file" accept="audio/*" />
+            <span>DROP SONG</span>
+            <strong id="pixelSongLabel">把原歌拖到这里</strong>
+          </label>
+
+          <div class="cd-bay" aria-hidden="true">
+            <div class="cd-disc" id="pixelDisc">
+              <span class="cd-hole"></span>
+              <span class="cd-shine"></span>
+            </div>
+            <div class="laser-line"></div>
+          </div>
+
+          <div class="pixel-pipeline" aria-label="自动流程">
+            <span data-pixel-step="project">PROJECT</span>
+            <span data-pixel-step="split">STEMS</span>
+            <span data-pixel-step="lyrics">LYRICS</span>
+            <span data-pixel-step="animation">ANIM</span>
+          </div>
+
+          <div class="deck-display">
+            <span id="pixelDeckMode">STANDARD</span>
+            <strong id="pixelDeckReady">WAITING</strong>
+          </div>
+
+          <div class="deck-buttons">
+            <button id="pixelRecordButton" class="deck-record" type="button" disabled title="录音 / 停止录音">
+              <span></span>
+            </button>
+            <button id="pixelPlayButton" class="deck-play" type="button" disabled title="播放刚才录制的歌曲">
+              <span></span>
+            </button>
+            <button id="pixelStyleButton" class="deck-style" type="button" title="切换 natural / standard / hard">
+              STYLE
+            </button>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <main class="studio-shell">
+      <header class="topbar">
+        <div>
+          <p class="kicker">karaoke mv workstation</p>
+          <h1>Pixel OK</h1>
+        </div>
+        <div class="capabilities" id="capabilities">
+          <span data-cap="uvr">UVR 三轨分离</span>
+          <span data-cap="asr">本地歌词识别</span>
+          <span data-cap="recorder">麦克风录音</span>
+          <span data-cap="exporter">MV 导出</span>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <section class="source-rail">
+          <div class="module project-module">
+            <details id="projectVaultDetails" class="project-vault-details">
+              <summary>
+                <span>
+                  <strong>历史项目 / 自动保存</strong>
+                  <small id="projectVaultSummary">无历史项目</small>
+                </span>
+              </summary>
+              <div class="project-vault-body">
+                <div class="module-head">
+                  <div>
+                    <p class="module-kicker">project vault</p>
+                    <h2>历史项目</h2>
+                  </div>
+                  <button id="refreshProjectsButton" type="button">刷新</button>
+                </div>
+                <div class="project-list" id="projectList"></div>
+                <p class="status" id="projectStatus">拖入新原歌会自动创建新项目。</p>
+              </div>
+            </details>
+          </div>
+
+          <label class="dropzone" for="songFile" data-kind="song">
+            <span>01 / 原歌</span>
+            <strong id="songName">拖入歌曲或点这里选择</strong>
+            <canvas id="songWave" width="760" height="118"></canvas>
+            <input id="songFile" type="file" accept="audio/*" />
+          </label>
+
+          <div class="module split-module">
+            <div class="module-head">
+              <div>
+                <p class="module-kicker">stem lab</p>
+                <h2>分轨</h2>
+              </div>
+            </div>
+            <p class="status" id="splitStatus">先放入一首歌。</p>
+            <div class="track-stack hidden" id="stemTracks">
+              <div class="stem-switch" role="tablist" aria-label="试听音轨">
+                <button type="button" class="active" data-stem-track="original">原歌</button>
+                <button type="button" data-stem-track="lead" disabled>主唱</button>
+                <button type="button" data-stem-track="backing" disabled>含和声的伴奏</button>
+              </div>
+              <div class="stem-player" aria-label="统一音轨播放器">
+                <button id="stemPlayButton" class="stem-play" type="button" disabled>播放</button>
+                <div class="stem-progress">
+                  <div class="stem-meta">
+                    <strong id="stemActiveLabel">原歌</strong>
+                    <span><span id="stemCurrent">00:00</span> / <span id="stemDuration">00:00</span></span>
+                  </div>
+                  <input id="stemSeek" type="range" min="0" max="0" step="0.01" value="0" disabled />
+                </div>
+              </div>
+              <div class="stem-downloads" aria-label="下载分轨文件">
+                <a id="downloadLeadStem" class="stem-download disabled" href="#" download>下载主唱</a>
+                <a id="downloadBackingStem" class="stem-download disabled" href="#" download>下载伴奏</a>
+              </div>
+              <label>
+                <span>原歌</span>
+                <audio id="songAudio" controls></audio>
+              </label>
+              <label id="leadWrap">
+                <span>主唱</span>
+                <audio id="leadAudio" controls></audio>
+              </label>
+              <label>
+                <span>含和声的伴奏</span>
+                <audio id="backingAudio" controls></audio>
+              </label>
+              <label class="hidden" id="acapellaWrap">
+                <span>全人声 / 后台识别用</span>
+                <audio id="acapellaAudio" controls></audio>
+              </label>
+              <label class="hidden" id="harmonyWrap">
+                <span>和声 / 剩余人声</span>
+                <audio id="harmonyAudio" controls></audio>
+              </label>
+            </div>
+          </div>
+
+          <div class="module lyric-module">
+            <div class="module-head">
+              <div>
+                <p class="module-kicker">pixel lyrics</p>
+                <h2>歌词脚本</h2>
+              </div>
+            </div>
+            <div class="pipeline-steps" aria-label="歌词转动画链路">
+              <span data-pipeline-step="cues">1 字幕时间轴：等待歌词</span>
+              <span data-pipeline-step="plan">2 动画分镜：等待时间轴</span>
+              <span data-pipeline-step="render">3 预览/导出：等待分镜</span>
+            </div>
+            <div class="lyric-search">
+              <label>
+                <span>歌手</span>
+                <input id="lyricArtist" type="text" autocomplete="off" placeholder="Michael Jackson" />
+              </label>
+              <label>
+                <span>歌名</span>
+                <input id="lyricTitle" type="text" autocomplete="off" placeholder="Thriller" />
+              </label>
+              <button id="studioAutoButton" class="primary-action" type="button" disabled>一键制作</button>
+            </div>
+            <p class="status" id="studioAutoStatus">拖入原歌，填歌手和歌名，然后点一次制作。</p>
+            <textarea id="lyricsInput" spellcheck="false" placeholder="歌词会由一键制作自动填入；必要时可在这里校正文字。"></textarea>
+            <div class="lyric-tools">
+              <label>
+                <span>比例</span>
+                <select id="screenRatio">
+                  <option value="4:3">4:3 老电视</option>
+                  <option value="1:1">1:1 方屏</option>
+                  <option value="16:9">16:9 横屏</option>
+                </select>
+              </label>
+              <label>
+                <span>字幕样式</span>
+                <select id="lyricStyle">
+                  <option value="karaoke">KTV 扫光</option>
+                  <option value="neon">霓虹弹入</option>
+                  <option value="glitch">故障闪切</option>
+                  <option value="poster">像素海报</option>
+                </select>
+              </label>
+            </div>
+            <div class="lyric-nudge-row" aria-label="字幕校准">
+              <span>字幕校准</span>
+              <button type="button" data-lyric-nudge="-1">提前 1s</button>
+              <button type="button" data-lyric-nudge="-0.2">提前 0.2s</button>
+              <button type="button" data-lyric-nudge="-0.05">提前 0.05s</button>
+              <button type="button" data-lyric-nudge="0.05">延后 0.05s</button>
+              <button type="button" data-lyric-nudge="0.2">延后 0.2s</button>
+              <button type="button" data-lyric-nudge="1">延后 1s</button>
+            </div>
+            <p class="content-status" id="contentStatus">动画会按歌名和歌词意象生成具体像素画；波形只负责驱动动作爆发。</p>
+          </div>
+        </section>
+
+        <section class="screen-rail">
+          <div class="crt-frame">
+            <canvas id="pixelScreen" width="960" height="720"></canvas>
+          </div>
+          <div class="transport-panel">
+            <button id="exportMvButton" type="button" disabled>导出 MV</button>
+            <a id="downloadMv" class="hidden" download="pixel-ok-mv.webm">下载 MV</a>
+            <p id="mvStatus">像素屏会用代码生成动画，并跟随播放时间显示当前歌词。</p>
+          </div>
+        </section>
+
+        <section class="mix-rail">
+          <div class="module record-module">
+            <div class="module-head">
+              <div>
+                <p class="module-kicker">live take</p>
+                <h2>录音</h2>
+              </div>
+              <span id="recordClock">00:00</span>
+            </div>
+            <div class="record-buttons">
+              <button id="recordButton" type="button" disabled>播放伴奏并录音</button>
+              <button id="skipIntroRecordButton" type="button" disabled>跳过前奏录</button>
+              <button id="stopRecordButton" type="button" disabled>停止保存</button>
+              <button id="redoRecordButton" type="button" disabled>重录</button>
+            </div>
+            <label class="switch-line">
+              <input id="monitorBacking" type="checkbox" checked />
+              <span>录音时播放伴奏</span>
+            </label>
+            <audio id="recordedAudio" controls></audio>
+            <a id="downloadTake" class="take-link hidden" download="pixel-ok-take.webm">下载这段干声</a>
+            <p class="status" id="recordStatus">等待伴奏和麦克风权限。</p>
+          </div>
+
+          <div class="module mix-module">
+            <div class="module-head">
+              <div>
+                <p class="module-kicker">mix desk</p>
+                <h2>预览 / 混音</h2>
+              </div>
+              <button id="playMixButton" type="button" disabled>播放预览</button>
+            </div>
+            <div class="mix-transport" id="mixTransport">
+              <span id="mixCurrent">00:00</span>
+              <input id="mixSeek" type="range" min="0" max="0" step="0.01" value="0" disabled />
+              <span id="mixDuration">00:00</span>
+            </div>
+            <div class="alignment-panel">
+              <div class="alignment-head">
+                <div>
+                  <strong>干声对齐</strong>
+                  <span>蓝色=原唱主唱，粉色=你的干声，绿线=播放位置</span>
+                </div>
+                <button id="autoAlignButton" type="button" disabled>自动粗对齐</button>
+              </div>
+              <canvas id="alignmentWaveform" width="760" height="150"></canvas>
+              <p class="status" id="alignmentStatus">录完后会用主唱轨帮你估一个偏移。</p>
+            </div>
+            <label class="range-line offset-line">
+              <span>干声偏移</span>
+              <input id="vocalOffset" type="number" min="-600" max="600" step="0.01" value="0" inputmode="decimal" />
+              <output id="offsetOut">0.00s</output>
+            </label>
+            <div class="nudge-row align-nudge-row">
+              <button type="button" data-align-nudge="-1">提前 1s</button>
+              <button type="button" data-align-nudge="-0.1">提前 0.1s</button>
+              <button type="button" data-align-nudge="-0.01">提前 0.01s</button>
+              <button type="button" data-align-nudge="0.01">延后 0.01s</button>
+              <button type="button" data-align-nudge="0.1">延后 0.1s</button>
+              <button type="button" data-align-nudge="1">延后 1s</button>
+            </div>
+            <label class="switch-line">
+              <input id="mixBackingEnabled" type="checkbox" checked />
+              <span>预览时带伴奏</span>
+            </label>
+            <label class="range-line">
+              <span>伴奏</span>
+              <input id="backingGain" type="range" min="0" max="1.2" step="0.01" value="0.68" />
+              <output id="backingGainOut">68%</output>
+            </label>
+            <label class="range-line">
+              <span>人声</span>
+              <input id="vocalGain" type="range" min="0" max="1.6" step="0.01" value="1.08" />
+              <output id="vocalGainOut">108%</output>
+            </label>
+            <div class="preset-grid" id="presetGrid">
+              <button type="button" data-preset="clean">检查干声</button>
+              <button type="button" data-preset="studio" class="active">成品 Studio</button>
+              <button type="button" data-preset="air">明亮贴脸</button>
+              <button type="button" data-preset="tape">磁带质感</button>
+              <button type="button" data-preset="live">空间感</button>
+            </div>
+            <p class="status" id="mixStatus">录完一段后，可以边播边切换混音效果。</p>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/static/app.js?v=stem-download-1"></script>
+  </body>
+</html>

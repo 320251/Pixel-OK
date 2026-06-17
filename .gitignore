@@ -1,0 +1,41 @@
+# Python / local environments
+.venv/
+.uvr-venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Runtime data and generated media
+jobs/
+cache/
+gpu_test/
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+*.webm
+*.mp4
+*.mov
+
+# Local model/vendor checkouts
+vendor/
+models/
+*.onnx
+*.safetensors
+*.pt
+*.pth
+
+# Browser/debug profiles
+chrome-*/
+chrome-*.log
+*.log
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Codex/private local scratch
+codex-clipboard-*

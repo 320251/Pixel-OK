@@ -1,0 +1,4 @@
+interface:
+  display_name: "Local VJ Director"
+  short_description: "Rhythm-driven VJ rules for Pixel OK."
+  default_prompt: "Use this skill when changing Pixel OK VJ, lyrics, analysis, timeline, visual plans, or export behavior."
